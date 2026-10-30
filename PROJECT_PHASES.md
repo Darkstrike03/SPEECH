@@ -8,7 +8,7 @@ Living plan. Update status as work lands. Source of truth for decisions.
 | --- | --- |
 | Repo | https://github.com/Darkstrike03/SPEECH |
 | Backend | https://speech-to-text-api-9ovp.onrender.com (Render free, 512 MB / 0.1 CPU, sleeps after 15 min) |
-| Frontend | Vercel — not deployed yet (pending Phase 3) |
+| Frontend | https://speechtotexteng.vercel.app (Vercel, static) |
 | Local API | http://127.0.0.1:8000 |
 | Local web | http://127.0.0.1:5500 (`python -m http.server 5500 --directory frontend`) |
 | Python | 3.12.7 inside `.venv` — always use `.venv\Scripts\python.exe` (Inkscape ships its own Python) |
@@ -33,7 +33,7 @@ Living plan. Update status as work lands. Source of truth for decisions.
 | 0 | Render latency spike + engine decision | **done** — local Whisper too slow on Render; Google chosen |
 | 1 | Streaming backend: VAD endpointer + `/ws/stream` | **done** — local replay + Render verified |
 | 2 | Ink-painting UI rewrite + live mic client | **done** — browser E2E passes (Google + Whisper) |
-| 3 | Vercel deploy, README, final smoke test | **in progress** |
+| 3 | Vercel deploy, README, final smoke test | **done** |
 
 ### Phase 0 — checklist
 - [x] `render.yaml` + `backend/.python-version` committed (`cee58a7`)
@@ -61,11 +61,11 @@ Living plan. Update status as work lands. Source of truth for decisions.
 - [x] Fix: keep trailing silence for Google (300 ms pad) and stop trimming speech on `stop`
 
 ### Phase 3 — checklist
-- [ ] Vercel deploy of `frontend/` (static, no build)
+- [x] Vercel deploy of `frontend/` (static, no build) → https://speechtotexteng.vercel.app
 - [x] `config.js` `API_BASE` → Render URL
-- [ ] CORS check from deployed origin
+- [x] CORS check from deployed origin (`*.vercel.app` preflight returns 200)
 - [x] README with architecture, protocol, measured latency, limits
-- [ ] Public-URL smoke test (upload + live)
+- [x] Public-URL smoke test (upload 2.0 s, live finals, zero page errors)
 
 ## Architecture
 

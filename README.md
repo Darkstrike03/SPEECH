@@ -4,8 +4,9 @@ A small speech-to-text web app for the "Speech-to-Text Transcription" assignment
 audio recordings (and live microphone speech) into text using Python speech-recognition
 libraries, wrapped in a light rice-paper and ink-painting interface.
 
+- **Live demo:** https://speechtotexteng.vercel.app
 - **API:** https://speech-to-text-api-9ovp.onrender.com (`/docs`, `/health`)
-- **Frontend:** static site (`frontend/`), intended for Vercel
+- **Frontend:** static site (`frontend/`) deployed on Vercel
 - **Repo:** https://github.com/Darkstrike03/SPEECH
 
 ## Features
