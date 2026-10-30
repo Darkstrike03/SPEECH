@@ -26,6 +26,8 @@ from fastapi.responses import JSONResponse
 
 from streaming import StreamEndpointer, Utterance, VadEvent
 from transcriber import (
+    GROQ_API_KEY,
+    GROQ_MODEL,
     MAX_AUDIO_SECONDS,
     SAMPLE_RATE,
     WHISPER_MODEL_SIZE,
@@ -138,6 +140,8 @@ def health() -> dict:
     return {
         "status": "ok",
         "whisper_model": WHISPER_MODEL_SIZE,
+        "asr_provider": "groq" if GROQ_API_KEY else "local",
+        "groq_model": GROQ_MODEL if GROQ_API_KEY else None,
         "max_upload_mb": MAX_UPLOAD_BYTES // (1024 * 1024),
         "max_audio_seconds": MAX_AUDIO_SECONDS,
         "max_stream_seconds": MAX_STREAM_SECONDS,
@@ -199,6 +203,7 @@ def api_transcribe(
         "warnings": result.warnings,
         "elapsed": round(time.perf_counter() - started, 2),
         "filename": Path(file.filename or "audio").name,
+        "provider": result.provider,
     }
 
 
@@ -271,6 +276,7 @@ async def ws_stream(websocket: WebSocket) -> None:
                                 "language": result.language,
                                 "audio_seconds": round(len(item["pcm"]) / SAMPLE_RATE, 2),
                                 "elapsed": round(time.perf_counter() - started, 2),
+                                "provider": result.provider,
                             }
                         )
                     else:

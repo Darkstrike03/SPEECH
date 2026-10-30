@@ -27,8 +27,9 @@ Living plan. Update status as work lands. Source of truth for decisions.
 
 | # | Phase | Status |
 | --- | --- | --- |
-| 0 | Render latency spike: deploy upload API, measure RTF | **in progress** |
-| 1 | Streaming backend: VAD endpointer + `/ws/stream` | code written, local test pending |
+| 0 | Render latency spike: deploy upload API, measure RTF | **done** — Render too slow, moving ASR to Groq |
+| 1 | Streaming backend: VAD endpointer + `/ws/stream` | local replay passes; Render deploy verified |
+| 1b | Hosted Whisper provider (Groq) with local fallback | **in progress** |
 | 2 | Ink-painting UI rewrite + live mic client | not started |
 | 3 | Deploy frontend to Vercel, README, final smoke test | not started |
 
@@ -94,9 +95,17 @@ Server → client
 | --- | --- | --- | --- | --- |
 | Local (desktop) | 8.0 s | 0.84 s | 0.11 | warm model, HTTP upload |
 | Local (desktop) | 8.0 s | 1.23 s | 0.16 | first warm call |
-| Render free | — | — | — | **pending** |
+| Render free | 8.0 s | 44.9–50.5 s | **5.6–6.3** | three warm runs; unusable for live |
+| Groq hosted | — | — | — | pending key |
 
 Interpretation: RTF < 0.5 smooth, 0.5–1 demoable, > 1 tune/reduce utterance size.
+
+**Finding (Phase 0):** Render free (0.1 CPU) cannot run local Whisper in real time — a 3 s
+utterance would take ~17 s. HF Docker Spaces now require a paid plan, so the resolution is:
+Render keeps the WebSocket + VAD (cheap), Groq runs Whisper large-v3-turbo (free tier:
+20 RPM, 2,000 req/day, 7,200 audio-sec/hour). Local tiny model remains the automatic
+fallback when `GROQ_API_KEY` is missing or the hosted call fails.
+
 
 ## Env vars (backend)
 

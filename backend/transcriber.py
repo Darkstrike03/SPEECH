@@ -12,7 +12,15 @@ from typing import Iterable
 
 import av
 import numpy as np
+import requests
 import speech_recognition as sr
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().with_name(".env"))
+except ImportError:
+    pass
 
 SAMPLE_RATE = 16_000
 MAX_AUDIO_SECONDS = int(os.getenv("MAX_AUDIO_SECONDS", "300"))
@@ -21,6 +29,12 @@ GOOGLE_CHUNK_SECONDS = 45
 WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "tiny")
 WHISPER_MODEL_DIR = Path(os.getenv("WHISPER_MODEL_DIR", "models"))
 WHISPER_VAD = os.getenv("WHISPER_VAD", "1") == "1"
+
+ASR_PROVIDER = os.getenv("ASR_PROVIDER", "auto").lower()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GROQ_MODEL = os.getenv("GROQ_MODEL", "whisper-large-v3-turbo")
+GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1").rstrip("/")
+GROQ_TIMEOUT = float(os.getenv("GROQ_TIMEOUT", "120"))
 
 GOOGLE_LANGUAGES = {
     "en": "en-US",
@@ -61,6 +75,7 @@ class TranscriptionResult:
     duration: float
     segments: list[dict] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    provider: str = "local"
 
 
 def decode_audio(data: bytes) -> np.ndarray:
@@ -128,6 +143,101 @@ def _normalise_google_language(language: str) -> str:
     if not language or language == "auto":
         return "en-US"
     return GOOGLE_LANGUAGES.get(language, language)
+
+
+def _groq_language(language: str) -> str | None:
+    if not language or language == "auto":
+        return None
+    return language.split("-")[0].lower()
+
+
+def _groq_enabled() -> bool:
+    if ASR_PROVIDER == "local":
+        return False
+    return bool(GROQ_API_KEY)
+
+
+def _transcribe_groq(
+    pcm: np.ndarray, language: str, want_segments: bool
+) -> TranscriptionResult:
+    data = {
+        "model": GROQ_MODEL,
+        "temperature": "0",
+        "response_format": "verbose_json" if want_segments else "json",
+    }
+    lang = _groq_language(language)
+    if lang:
+        data["language"] = lang
+
+    try:
+        response = requests.post(
+            f"{GROQ_BASE_URL}/audio/transcriptions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+            data=data,
+            files={"file": ("audio.wav", _pcm_to_wav_bytes(pcm), "audio/wav")},
+            timeout=GROQ_TIMEOUT,
+        )
+    except requests.RequestException as exc:
+        raise TranscriptionError(
+            "Could not reach the hosted Whisper service.", "engine_unavailable"
+        ) from exc
+
+    if response.status_code == 429:
+        raise TranscriptionError(
+            "Hosted Whisper is rate-limited right now; try again in a moment.",
+            "engine_unavailable",
+        )
+    if response.status_code >= 400:
+        detail = response.text[:160].replace("\n", " ")
+        raise TranscriptionError(
+            f"Hosted Whisper returned HTTP {response.status_code}: {detail}",
+            "engine_failed",
+        )
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise TranscriptionError(
+            "Hosted Whisper returned an unreadable response.", "engine_failed"
+        ) from exc
+
+    segments: list[dict] = []
+    for segment in payload.get("segments") or []:
+        segment_text = (segment.get("text") or "").strip()
+        if segment_text:
+            segments.append(
+                {
+                    "start": round(float(segment.get("start", 0.0)), 2),
+                    "end": round(float(segment.get("end", 0.0)), 2),
+                    "text": segment_text,
+                }
+            )
+
+    return TranscriptionResult(
+        text=(payload.get("text") or "").strip(),
+        engine="whisper",
+        language=payload.get("language") or lang or (language or "unknown"),
+        duration=len(pcm) / SAMPLE_RATE,
+        segments=segments,
+        warnings=[],
+        provider="groq",
+    )
+
+
+def _transcribe_auto(
+    pcm: np.ndarray, language: str, want_segments: bool
+) -> TranscriptionResult:
+    if _groq_enabled():
+        try:
+            return _transcribe_groq(pcm, language, want_segments)
+        except TranscriptionError as exc:
+            result = _transcribe_whisper(pcm, language)
+            if want_segments:
+                result.warnings.append(
+                    f"Hosted Whisper unavailable ({exc.message}); used the on-server model."
+                )
+            return result
+    return _transcribe_whisper(pcm, language)
 
 
 def get_whisper_model():
@@ -255,11 +365,11 @@ def transcribe(
     pcm = decode_audio(data)
     if engine == "google":
         return _transcribe_google(pcm, language)
-    return _transcribe_whisper(pcm, language)
+    return _transcribe_auto(pcm, language, want_segments=True)
 
 
 def transcribe_pcm(pcm: np.ndarray, language: str = "auto") -> TranscriptionResult:
     """Transcribe 16 kHz mono int16 PCM that the caller already segmented."""
     if pcm.size == 0:
         raise TranscriptionError("No audio to transcribe.", "no_audio_frames")
-    return _transcribe_whisper(pcm, language, vad_filter=False)
+    return _transcribe_auto(pcm, language, want_segments=False)
