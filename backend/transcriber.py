@@ -154,17 +154,20 @@ def get_whisper_model():
     return _whisper_model
 
 
-def _transcribe_whisper(pcm: np.ndarray, language: str) -> TranscriptionResult:
+def _transcribe_whisper(
+    pcm: np.ndarray, language: str, vad_filter: bool | None = None
+) -> TranscriptionResult:
     model = get_whisper_model()
     audio = pcm.astype(np.float32) / 32768.0
     lang = None if language in ("", "auto") else language
+    use_vad = WHISPER_VAD if vad_filter is None else vad_filter
 
     try:
         with _whisper_lock:
             segments_iter, info = model.transcribe(
                 audio,
                 language=lang,
-                vad_filter=WHISPER_VAD,
+                vad_filter=use_vad,
                 beam_size=1,
                 condition_on_previous_text=False,
             )
@@ -253,3 +256,10 @@ def transcribe(
     if engine == "google":
         return _transcribe_google(pcm, language)
     return _transcribe_whisper(pcm, language)
+
+
+def transcribe_pcm(pcm: np.ndarray, language: str = "auto") -> TranscriptionResult:
+    """Transcribe 16 kHz mono int16 PCM that the caller already segmented."""
+    if pcm.size == 0:
+        raise TranscriptionError("No audio to transcribe.", "no_audio_frames")
+    return _transcribe_whisper(pcm, language, vad_filter=False)
