@@ -90,10 +90,11 @@ Optional checks:
 
 WebSocket contract: send `{"type":"start","language":"en","engine":"google"}`, then raw
 little-endian int16 PCM (16 kHz mono), optional `ping`, and `stop`. The server replies with
-`ready`, `vad`, `processing`, `final`, `empty`, `warning`, `error`, `pong`, and `done`.
+`ready`, `queued`, `vad`, `processing`, `final`, `empty`, `warning`, `error`, `pong`, and `done`.
+Audio is only sent after `ready`.
 
-Limits: 25 MB upload, 5 minutes of audio, 5-minute live sessions, 2 concurrent streams per IP,
-15 uploads per 10 minutes per IP.
+Limits: 25 MB upload, 5 minutes of audio, 5-minute live sessions, one active live session with a
+five-client FIFO queue, and 30 uploads per 10 minutes globally.
 
 ## Deploy
 

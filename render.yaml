@@ -19,5 +19,9 @@
         value: "25"
       - key: MAX_AUDIO_SECONDS
         value: "300"
+      - key: MAX_LIVE_QUEUE
+        value: "5"
+      - key: STREAM_IDLE_TIMEOUT_SECONDS
+        value: "90"
       - key: ALLOWED_ORIGINS
         value: http://localhost:5500,http://127.0.0.1:5500

@@ -24,7 +24,8 @@ Living plan. Update status as work lands. Source of truth for decisions.
 - No hosted API key anywhere; Groq was evaluated and removed (see Phase 0 finding).
 - UI = **light rice-paper ink-painting** theme, **English text only** (calligraphy is visual, not textual).
 - Any-format uploads decoded with PyAV; no system ffmpeg.
-- Limits: 25 MB upload, 5 min audio, 5 min live session, 2 concurrent live streams per IP.
+- Limits: 25 MB upload, 5 min audio, 5 min live session, one active live stream with a
+  five-client FIFO queue (120 s wait, 90 s idle timeout).
 
 ## Phases
 
@@ -46,7 +47,7 @@ Living plan. Update status as work lands. Source of truth for decisions.
 ### Phase 1 — checklist
 - [x] `backend/streaming.py` — energy VAD, pre-roll/hangover/force-cut, absolute timestamps
 - [x] `backend/transcriber.py` — `transcribe_pcm(..., engine)` reuses warm model
-- [x] `backend/app.py` — `/ws/stream`, worker queue, concurrency cap, session cap, keepalive
+- [x] `backend/app.py` — `/ws/stream`, worker queue, single global slot + 5-client queue, session cap, idle watchdog, keepalive
 - [x] `backend/ws_test_client.py` — replay tool (`--engine`, `--realtime`)
 - [x] Local replay passes (Google and Whisper)
 - [x] Commit + push, Render redeploys
@@ -88,13 +89,14 @@ Client → server
 - `{"type":"stop"}` — flushes the open utterance, drains the queue
 
 Server → client
-- `ready`: `{sample_rate, frame_ms, max_seconds, engine, whisper_model}`
+- `queued`: `{position, max_wait_seconds}` — another live session is active; wait for `ready`
+- `ready`: `{sample_rate, frame_ms, max_seconds, engine, whisper_model}` — start sending audio now
 - `vad`: `{speaking: bool}`
 - `processing`: `{seq, start}` — utterance accepted
 - `final`: `{seq, text, start, end, language, engine, warnings, audio_seconds, elapsed, provider}`
 - `empty`: `{seq, start}` — VAD segment had no speech
 - `warning`: backlog / skipped segment
-- `error`: `{code, message}` → `too_many_streams`, `too_long`, `expected_start`, engine failures
+- `error`: `{code, message}` → `stream_full`, `live_queue_timeout`, `idle_timeout`, `too_long`, `expected_start`, engine failures
 - `pong`, `done`: `{dropped}`
 
 ## Measured performance
@@ -120,12 +122,20 @@ silence. Google requests now append 300 ms of silence; `stop` no longer trims sp
 final utterance. Google also occasionally merges "tool. The" into "to all the" — an accuracy
 limitation, not a pipeline bug; Whisper returns the exact words.
 
+**Live review fixes:** the level meter captured the analyser locally and stops when it is
+cleaned up (fixes the `getByteTimeDomainData` null crash). Per-IP live caps were replaced by one
+global slot plus a five-client FIFO queue; queued clients get `queued` immediately, send no audio
+until `ready`, and abandoned sockets are freed by a 90 s idle watchdog. The client announces
+"waking the server" after 6 s and gives up after 60 s instead of sitting on "Connecting…" during
+a Render cold start.
+
 ## Env vars (backend)
 
 `DEFAULT_ENGINE=google`, `WHISPER_MODEL_SIZE=tiny`, `WHISPER_MODEL_DIR=models`,
 `WHISPER_VAD=1` (uploads only), `MAX_UPLOAD_MB=25`, `MAX_AUDIO_SECONDS=300`,
-`MAX_STREAM_SECONDS=300`, `MAX_CONCURRENT_STREAMS=2`, `RATE_LIMIT_REQUESTS=15`,
-`RATE_LIMIT_WINDOW_SECONDS=600`, `ALLOWED_ORIGINS=...`
+`MAX_STREAM_SECONDS=300`, `MAX_LIVE_QUEUE=5`, `LIVE_QUEUE_TIMEOUT_SECONDS=120`,
+`STREAM_IDLE_TIMEOUT_SECONDS=90`, `RATE_LIMIT_REQUESTS=30`, `RATE_LIMIT_WINDOW_SECONDS=600`,
+`ALLOWED_ORIGINS=...`
 
 No API keys required.
 

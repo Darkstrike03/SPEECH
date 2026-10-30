@@ -62,12 +62,12 @@
 
   const ENGINE_NOTES = {
     google: "SpeechRecognition · Google Web Speech. Fast, needs internet.",
-    whisper: "On-server Whisper tiny. Works offline, slower on free hosting."
+    whisper: "On-server Whisper tiny. On free hosting expect ~3 min per audio minute."
   };
 
   const LIVE_ENGINE_NOTES = {
     google: "SpeechRecognition · Google Web Speech. One request per phrase.",
-    whisper: "On-server Whisper tiny. Slower on free hosting."
+    whisper: "On-server Whisper tiny. Much slower on free hosting."
   };
 
   const LANGUAGE_NAMES = {
@@ -102,6 +102,11 @@
       status: "idle",
       language: "auto",
       engine: "google",
+      ready: false,
+      everReady: false,
+      queued: false,
+      connectSlowId: 0,
+      connectLimitId: 0,
       doneResolver: null
     }
   };
@@ -449,9 +454,12 @@
   }
 
   function startMeter() {
-    const data = new Uint8Array(state.live.analyser.fftSize);
+    const analyser = state.live.analyser;
+    if (!analyser) return;
+    const data = new Uint8Array(analyser.fftSize);
     const loop = () => {
-      state.live.analyser.getByteTimeDomainData(data);
+      if (state.live.analyser !== analyser) return;
+      analyser.getByteTimeDomainData(data);
       let sum = 0;
       for (let i = 0; i < data.length; i += 1) {
         const value = (data[i] - 128) / 128;
@@ -485,10 +493,46 @@
     return false;
   }
 
+  function clearConnectWatch() {
+    if (state.live.connectSlowId) window.clearTimeout(state.live.connectSlowId);
+    if (state.live.connectLimitId) window.clearTimeout(state.live.connectLimitId);
+    state.live.connectSlowId = 0;
+    state.live.connectLimitId = 0;
+  }
+
+  function startConnectWatch() {
+    clearConnectWatch();
+    state.live.connectSlowId = window.setTimeout(() => {
+      if (!state.live.active || state.live.ready || state.live.queued) return;
+      setLiveUI(true, "Waking the server… free hosting can take up to a minute.");
+    }, 6000);
+    state.live.connectLimitId = window.setTimeout(() => {
+      if (!state.live.active || state.live.ready || state.live.queued) return;
+      showError(
+        "Server is not responding",
+        "The live API did not answer within 60 seconds. Wait a moment and tap the mic to try again."
+      );
+      stopLive();
+    }, 60000);
+  }
+
   function handleServerMessage(payload) {
     switch (payload.type) {
+      case "queued": {
+        state.live.ready = false;
+        state.live.queued = true;
+        clearConnectWatch();
+        const position = Number(payload.position) || 1;
+        setLiveUI(true, `Waiting for a live slot (#${position})…`);
+        break;
+      }
       case "ready":
+        state.live.ready = true;
+        state.live.everReady = true;
+        state.live.queued = false;
+        clearConnectWatch();
         state.live.status = "listening";
+        if (!state.live.timerId) startTimer();
         setLiveUI(true, "Listening");
         break;
       case "vad":
@@ -514,8 +558,14 @@
         if (payload.code === "too_long") {
           showError("Session limit reached", payload.message);
           stopLive();
-        } else if (payload.code === "too_many_streams") {
-          showError("Too many live sessions", payload.message);
+        } else if (payload.code === "stream_full") {
+          showError("Live queue is full", payload.message);
+          stopLive();
+        } else if (payload.code === "live_queue_timeout") {
+          showError("No live slot opened up", payload.message);
+          stopLive();
+        } else if (payload.code === "idle_timeout") {
+          showError("Live session ended", payload.message);
           stopLive();
         } else {
           appendLiveWarning(payload.message);
@@ -570,6 +620,7 @@
   }
 
   function openSocket() {
+    startConnectWatch();
     const ws = new WebSocket(WS_URL);
     state.live.ws = ws;
 
@@ -601,7 +652,18 @@
     ws.onclose = () => {
       if (state.live.pingId) window.clearInterval(state.live.pingId);
       state.live.pingId = 0;
+      state.live.ready = false;
+      state.live.queued = false;
       if (!state.live.active || state.live.stopping) return;
+
+      if (!state.live.everReady) {
+        showError(
+          "Cannot reach the live API",
+          "The microphone stream never connected. An ad blocker or privacy extension can block the API; try Incognito or allow speech-to-text-api-9ovp.onrender.com."
+        );
+        stopLive();
+        return;
+      }
 
       if (state.live.reconnects < 2) {
         state.live.reconnects += 1;
@@ -669,17 +731,19 @@
       state.live.analyser = analyser;
       state.live.seen = new Set();
       state.live.reconnects = 0;
+      state.live.ready = false;
+      state.live.everReady = false;
+      state.live.queued = false;
       state.live.stopping = false;
       state.live.active = true;
 
       worklet.port.onmessage = (event) => {
         const ws = state.live.ws;
-        if (ws && ws.readyState === WebSocket.OPEN) ws.send(event.data);
+        if (state.live.ready && ws && ws.readyState === WebSocket.OPEN) ws.send(event.data);
       };
 
       setLiveUI(true, "Connecting…");
       startMeter();
-      startTimer();
       openSocket();
     } catch (error) {
       cleanupAudio();
@@ -697,6 +761,9 @@
   function cleanupAudio() {
     stopMeter();
     stopTimer();
+    clearConnectWatch();
+    state.live.ready = false;
+    state.live.queued = false;
     if (state.live.pingId) window.clearInterval(state.live.pingId);
     state.live.pingId = 0;
 
@@ -723,7 +790,7 @@
     state.live.active = false;
 
     const ws = state.live.ws;
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    if (ws && ws.readyState === WebSocket.OPEN && state.live.ready) {
       const finished = new Promise((resolve) => {
         state.live.doneResolver = resolve;
         setTimeout(resolve, 8000);

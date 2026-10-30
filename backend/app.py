@@ -7,7 +7,7 @@ import itertools
 import json
 import os
 import time
-from collections import defaultdict, deque
+from collections import deque
 from pathlib import Path
 from threading import Lock
 
@@ -37,10 +37,12 @@ from transcriber import (
 )
 
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "25")) * 1024 * 1024
-RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "15"))
+RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "30"))
 RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "600"))
 MAX_STREAM_SECONDS = int(os.getenv("MAX_STREAM_SECONDS", "300"))
-MAX_CONCURRENT_STREAMS = int(os.getenv("MAX_CONCURRENT_STREAMS", "2"))
+MAX_LIVE_QUEUE = int(os.getenv("MAX_LIVE_QUEUE", "5"))
+LIVE_QUEUE_TIMEOUT = int(os.getenv("LIVE_QUEUE_TIMEOUT_SECONDS", "120"))
+STREAM_IDLE_TIMEOUT = int(os.getenv("STREAM_IDLE_TIMEOUT_SECONDS", "90"))
 
 DEFAULT_ORIGINS = "http://localhost:5500,http://127.0.0.1:5500,http://localhost:8000"
 ALLOWED_ORIGINS = [
@@ -80,40 +82,60 @@ app.add_middleware(
     max_age=86400,
 )
 
-_hits: dict[str, deque[float]] = defaultdict(deque)
+_hits: deque[float] = deque()
 _hits_lock = Lock()
 
-_stream_counts: dict[str, int] = {}
-_stream_lock = asyncio.Lock()
+_stream_cond = asyncio.Condition()
+_stream_active = False
+_stream_waiting = 0
 
 
-async def _acquire_stream(client_ip: str) -> bool:
-    async with _stream_lock:
-        current = _stream_counts.get(client_ip, 0)
-        if current >= MAX_CONCURRENT_STREAMS:
-            return False
-        _stream_counts[client_ip] = current + 1
-        return True
+async def _acquire_stream(on_queued=None) -> tuple[str, int]:
+    """One live session at a time; wait in a small FIFO queue for a free slot."""
+    global _stream_active, _stream_waiting
+
+    async with _stream_cond:
+        if not _stream_active:
+            _stream_active = True
+            return "active", 0
+
+        if _stream_waiting >= MAX_LIVE_QUEUE:
+            return "full", 0
+
+        _stream_waiting += 1
+        position = _stream_waiting
+        if on_queued is not None:
+            await on_queued(position)
+        try:
+            await asyncio.wait_for(
+                _stream_cond.wait_for(lambda: not _stream_active),
+                timeout=LIVE_QUEUE_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            return "timeout", position
+        finally:
+            _stream_waiting -= 1
+
+        _stream_active = True
+        return "active", position
 
 
-async def _release_stream(client_ip: str) -> None:
-    async with _stream_lock:
-        current = _stream_counts.get(client_ip, 1) - 1
-        if current <= 0:
-            _stream_counts.pop(client_ip, None)
-        else:
-            _stream_counts[client_ip] = current
+async def _release_stream() -> None:
+    global _stream_active
+
+    async with _stream_cond:
+        _stream_active = False
+        _stream_cond.notify_all()
 
 
-def _rate_limited(client_ip: str) -> bool:
+def _rate_limited() -> bool:
     now = time.monotonic()
     with _hits_lock:
-        window = _hits[client_ip]
-        while window and now - window[0] > RATE_LIMIT_WINDOW:
-            window.popleft()
-        if len(window) >= RATE_LIMIT_REQUESTS:
+        while _hits and now - _hits[0] > RATE_LIMIT_WINDOW:
+            _hits.popleft()
+        if len(_hits) >= RATE_LIMIT_REQUESTS:
             return True
-        window.append(now)
+        _hits.append(now)
         return False
 
 
@@ -145,6 +167,7 @@ def health() -> dict:
         "max_upload_mb": MAX_UPLOAD_BYTES // (1024 * 1024),
         "max_audio_seconds": MAX_AUDIO_SECONDS,
         "max_stream_seconds": MAX_STREAM_SECONDS,
+        "live_queue": MAX_LIVE_QUEUE,
         "streaming": True,
     }
 
@@ -156,8 +179,7 @@ def api_transcribe(
     engine: str = Form(DEFAULT_ENGINE),
     language: str = Form("auto"),
 ):
-    client_ip = request.client.host if request.client else "unknown"
-    if _rate_limited(client_ip):
+    if _rate_limited():
         return _error(
             "Too many requests. Please wait a few minutes and try again.",
             "rate_limited",
@@ -213,19 +235,6 @@ MAX_STREAM_QUEUE = 8
 @app.websocket("/ws/stream")
 async def ws_stream(websocket: WebSocket) -> None:
     await websocket.accept()
-    client_ip = websocket.client.host if websocket.client else "unknown"
-
-    if not await _acquire_stream(client_ip):
-        await websocket.send_json(
-            {
-                "type": "error",
-                "code": "too_many_streams",
-                "message": "Only two live sessions at a time, please close another tab.",
-            }
-        )
-        await websocket.close(code=1013)
-        return
-
     send_lock = asyncio.Lock()
 
     async def send(payload: dict) -> None:
@@ -234,6 +243,39 @@ async def ws_stream(websocket: WebSocket) -> None:
                 await websocket.send_json(payload)
         except (RuntimeError, WebSocketDisconnect):
             pass
+
+    async def announce_queue(position: int) -> None:
+        await send(
+            {
+                "type": "queued",
+                "position": position,
+                "max_wait_seconds": LIVE_QUEUE_TIMEOUT,
+            }
+        )
+
+    slot, position = await _acquire_stream(announce_queue)
+
+    if slot == "full":
+        await send(
+            {
+                "type": "error",
+                "code": "stream_full",
+                "message": f"Live queue is full ({MAX_LIVE_QUEUE} waiting). Try again in a minute.",
+            }
+        )
+        await websocket.close(code=1013)
+        return
+
+    if slot == "timeout":
+        await send(
+            {
+                "type": "error",
+                "code": "live_queue_timeout",
+                "message": "No live slot opened up in time. Tap the mic to try again.",
+            }
+        )
+        await websocket.close(code=1013)
+        return
 
     worker: asyncio.Task | None = None
     try:
@@ -337,7 +379,9 @@ async def ws_stream(websocket: WebSocket) -> None:
                 )
 
         while True:
-            message = await websocket.receive()
+            message = await asyncio.wait_for(
+                websocket.receive(), timeout=STREAM_IDLE_TIMEOUT
+            )
             if message["type"] == "websocket.disconnect":
                 break
 
@@ -380,13 +424,21 @@ async def ws_stream(websocket: WebSocket) -> None:
                 await queue.join()
                 await send({"type": "done", "dropped": dropped})
                 break
+    except asyncio.TimeoutError:
+        await send(
+            {
+                "type": "error",
+                "code": "idle_timeout",
+                "message": f"Live session closed after {STREAM_IDLE_TIMEOUT} seconds without audio.",
+            }
+        )
     except WebSocketDisconnect:
         pass
     finally:
         if worker is not None:
             worker.cancel()
             await asyncio.gather(worker, return_exceptions=True)
-        await _release_stream(client_ip)
+        await _release_stream()
         try:
             await websocket.close()
         except RuntimeError:
