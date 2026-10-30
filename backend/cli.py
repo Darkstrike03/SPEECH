@@ -26,10 +26,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Transcribe an audio file.")
     parser.add_argument("file", type=Path, help="Path to a wav/mp3/m4a/ogg/flac file")
     parser.add_argument(
-        "--engine", default="whisper", choices=["whisper", "google"], help="ASR engine"
+        "--engine", default="google", choices=["whisper", "google"], help="ASR engine"
     )
     parser.add_argument(
-        "--language", default="auto", help="Language code, e.g. en, hi. 'auto' for whisper"
+        "--language", default="auto", help="Language code, e.g. en, hi (auto = detect/en-US)"
     )
     parser.add_argument("--json", action="store_true", help="Print raw JSON result")
     args = parser.parse_args()

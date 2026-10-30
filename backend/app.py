@@ -26,8 +26,8 @@ from fastapi.responses import JSONResponse
 
 from streaming import StreamEndpointer, Utterance, VadEvent
 from transcriber import (
-    GROQ_API_KEY,
-    GROQ_MODEL,
+    DEFAULT_ENGINE,
+    ENGINES,
     MAX_AUDIO_SECONDS,
     SAMPLE_RATE,
     WHISPER_MODEL_SIZE,
@@ -67,7 +67,7 @@ STATUS_BY_CODE = {
 
 app = FastAPI(
     title="Speech-to-Text API",
-    description="Upload audio in any common format and get a transcript back.",
+    description="Upload audio or stream a microphone into Google Web Speech or on-server Whisper.",
     version="1.0.0",
 )
 
@@ -139,9 +139,9 @@ def root() -> dict:
 def health() -> dict:
     return {
         "status": "ok",
+        "engine": DEFAULT_ENGINE,
+        "engines": list(ENGINES),
         "whisper_model": WHISPER_MODEL_SIZE,
-        "asr_provider": "groq" if GROQ_API_KEY else "local",
-        "groq_model": GROQ_MODEL if GROQ_API_KEY else None,
         "max_upload_mb": MAX_UPLOAD_BYTES // (1024 * 1024),
         "max_audio_seconds": MAX_AUDIO_SECONDS,
         "max_stream_seconds": MAX_STREAM_SECONDS,
@@ -153,7 +153,7 @@ def health() -> dict:
 def api_transcribe(
     request: Request,
     file: UploadFile = File(...),
-    engine: str = Form("whisper"),
+    engine: str = Form(DEFAULT_ENGINE),
     language: str = Form("auto"),
 ):
     client_ip = request.client.host if request.client else "unknown"
@@ -163,8 +163,8 @@ def api_transcribe(
             "rate_limited",
         )
 
-    if engine not in ("whisper", "google"):
-        return _error("engine must be 'whisper' or 'google'", "bad_engine")
+    if engine not in ENGINES:
+        return _error("engine must be 'google' or 'whisper'", "bad_engine")
 
     declared = request.headers.get("content-length")
     if declared and int(declared) > MAX_UPLOAD_BYTES + 64 * 1024:
@@ -251,6 +251,9 @@ async def ws_stream(websocket: WebSocket) -> None:
             return
 
         language = str(config.get("language") or "auto")
+        engine = str(config.get("engine") or DEFAULT_ENGINE).lower()
+        if engine not in ENGINES:
+            engine = DEFAULT_ENGINE
         endpointer = StreamEndpointer()
         queue: asyncio.Queue = asyncio.Queue(maxsize=MAX_STREAM_QUEUE)
         counter = itertools.count(1)
@@ -263,7 +266,9 @@ async def ws_stream(websocket: WebSocket) -> None:
                 try:
                     await send({"type": "processing", "seq": item["seq"], "start": item["start"]})
                     started = time.perf_counter()
-                    result = await asyncio.to_thread(transcribe_pcm, item["pcm"], language)
+                    result = await asyncio.to_thread(
+                        transcribe_pcm, item["pcm"], language, engine
+                    )
                     text = result.text.strip()
                     if text:
                         await send(
@@ -274,6 +279,8 @@ async def ws_stream(websocket: WebSocket) -> None:
                                 "start": item["start"],
                                 "end": item["end"],
                                 "language": result.language,
+                                "engine": result.engine,
+                                "warnings": result.warnings,
                                 "audio_seconds": round(len(item["pcm"]) / SAMPLE_RATE, 2),
                                 "elapsed": round(time.perf_counter() - started, 2),
                                 "provider": result.provider,
@@ -288,7 +295,7 @@ async def ws_stream(websocket: WebSocket) -> None:
                         {
                             "type": "error",
                             "code": "engine_failed",
-                            "message": "Whisper failed on this audio segment.",
+                            "message": "Speech recognition failed on this audio segment.",
                         }
                     )
                 finally:
@@ -302,7 +309,8 @@ async def ws_stream(websocket: WebSocket) -> None:
                 "sample_rate": SAMPLE_RATE,
                 "frame_ms": 20,
                 "max_seconds": MAX_STREAM_SECONDS,
-                "model": WHISPER_MODEL_SIZE,
+                "engine": engine,
+                "whisper_model": WHISPER_MODEL_SIZE,
             }
         )
 

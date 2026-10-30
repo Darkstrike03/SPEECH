@@ -19,7 +19,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("file", type=Path)
     parser.add_argument("--url", default="http://127.0.0.1:8000")
-    parser.add_argument("--engine", default="whisper")
+    parser.add_argument("--engine", default="google")
     parser.add_argument("--language", default="auto")
     parser.add_argument("--runs", type=int, default=2)
     args = parser.parse_args()

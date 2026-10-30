@@ -83,7 +83,7 @@ class StreamEndpointer:
     def flush(self) -> list[Utterance | VadEvent]:
         events: list[Utterance | VadEvent] = []
         if self._in_speech and len(self._frames) >= self.min_frames:
-            events.append(self._close(trim=True))
+            events.append(self._close(trim=False))
         self._reset()
         return events
 

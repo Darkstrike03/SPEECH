@@ -13,12 +13,8 @@
         value: 3.12.7
       - key: WHISPER_MODEL_SIZE
         value: tiny
-      - key: ASR_PROVIDER
-        value: auto
-      - key: GROQ_MODEL
-        value: whisper-large-v3-turbo
-      - key: GROQ_API_KEY
-        sync: false
+      - key: DEFAULT_ENGINE
+        value: google
       - key: MAX_UPLOAD_MB
         value: "25"
       - key: MAX_AUDIO_SECONDS

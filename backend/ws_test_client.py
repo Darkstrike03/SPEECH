@@ -37,7 +37,9 @@ async def run(args: argparse.Namespace) -> int:
     wall_started = time.perf_counter()
 
     async with websockets.connect(ws_url, max_size=None, open_timeout=300) as ws:
-        await ws.send(json.dumps({"type": "start", "language": args.language}))
+        await ws.send(
+            json.dumps({"type": "start", "language": args.language, "engine": args.engine})
+        )
         ready = json.loads(await asyncio.wait_for(ws.recv(), timeout=300))
         print("server:", ready)
 
@@ -75,6 +77,7 @@ def main() -> int:
     parser.add_argument("file", type=Path)
     parser.add_argument("--url", default="http://127.0.0.1:8000")
     parser.add_argument("--language", default="auto")
+    parser.add_argument("--engine", default="google", choices=("google", "whisper"))
     parser.add_argument("--realtime", action="store_true", help="send at real-time pace")
     parser.add_argument("--speed", type=float, default=0.01, help="seconds between 100ms chunks")
     parser.add_argument("--pad-silence", type=float, default=0.5, help="seconds of silence to add")
