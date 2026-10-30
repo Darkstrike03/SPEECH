@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Speech to Text — Audio Transcription</title>
+  <meta name="description" content="Upload an audio recording and get a transcript in seconds. Whisper tiny or Google Web Speech." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236366f1'/%3E%3Cpath d='M16 7a4 4 0 0 1 4 4v5a4 4 0 0 1-8 0v-5a4 4 0 0 1 4-4Zm-7 9a7 7 0 0 0 14 0M16 23v4' stroke='white' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="aurora" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3Z"/>
+          <path d="M5 12a7 7 0 0 0 14 0M12 19v2"/>
+        </svg>
+      </span>
+      <div>
+        <h1>Speech to Text</h1>
+        <p>Turn any recording into a transcript</p>
+      </div>
+    </div>
+    <div id="apiStatus" class="status status--idle" role="status" aria-live="polite">
+      <span class="status-dot" aria-hidden="true"></span>
+      <span id="apiStatusText">Checking server…</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel" aria-labelledby="uploadHeading">
+      <h2 id="uploadHeading" class="sr-only">Upload audio</h2>
+
+      <div id="dropzone" class="dropzone" tabindex="0" role="button"
+           aria-label="Choose an audio file or drag and drop it here">
+        <input id="fileInput" type="file" accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac,.webm,.aac,.opus" hidden />
+        <div class="dropzone-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 16V4m0 0 4 4m-4-4L8 8"/>
+            <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>
+          </svg>
+        </div>
+        <p class="dropzone-title"><strong>Drop your audio file</strong> or <span class="link">browse</span></p>
+        <p class="dropzone-hint">wav, mp3, m4a, ogg, flac, webm &middot; up to 25 MB &middot; 5 minutes</p>
+      </div>
+
+      <div id="fileCard" class="file-card" hidden>
+        <div class="file-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/>
+          </svg>
+        </div>
+        <div class="file-meta">
+          <p id="fileName" class="file-name">audio.mp3</p>
+          <p id="fileDetails" class="file-details">—</p>
+        </div>
+        <button id="clearFile" class="icon-button" type="button" title="Remove file" aria-label="Remove file">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+
+      <div class="controls">
+        <fieldset class="control">
+          <legend>Engine</legend>
+          <div class="segmented" role="radiogroup" aria-label="Recognition engine">
+            <label class="segment">
+              <input type="radio" name="engine" value="whisper" checked />
+              <span>Whisper tiny <em>recommended</em></span>
+            </label>
+            <label class="segment">
+              <input type="radio" name="engine" value="google" />
+              <span>Google Web Speech</span>
+            </label>
+          </div>
+          <p id="engineHint" class="hint">Runs locally on the server. Timestamps included.</p>
+        </fieldset>
+
+        <div class="control">
+          <label for="language">Spoken language</label>
+          <select id="language">
+            <option value="auto">Detect automatically (Whisper only)</option>
+            <option value="en">English</option>
+            <option value="hi">Hindi</option>
+            <option value="bn">Bengali</option>
+            <option value="ta">Tamil</option>
+            <option value="te">Telugu</option>
+            <option value="mr">Marathi</option>
+            <option value="gu">Gujarati</option>
+            <option value="ur">Urdu</option>
+            <option value="es">Spanish</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="pt">Portuguese</option>
+            <option value="ru">Russian</option>
+            <option value="ar">Arabic</option>
+            <option value="zh">Chinese</option>
+            <option value="ja">Japanese</option>
+            <option value="ko">Korean</option>
+          </select>
+          <p id="languageHint" class="hint">Leave on auto unless the language is known.</p>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="transcribeBtn" class="primary-button" type="button" disabled>
+          <span class="button-label">Transcribe audio</span>
+          <span class="spinner" aria-hidden="true"></span>
+        </button>
+        <button id="resetBtn" class="ghost-button" type="button" hidden>Start over</button>
+      </div>
+
+      <div id="progress" class="progress" hidden>
+        <div class="progress-bar"><span></span></div>
+        <p id="progressText">Uploading…</p>
+      </div>
+
+      <div id="errorBox" class="error" role="alert" hidden>
+        <strong id="errorTitle">Something went wrong</strong>
+        <p id="errorMessage"></p>
+      </div>
+    </section>
+
+    <section id="resultPanel" class="panel result" aria-labelledby="resultHeading" hidden>
+      <div class="result-header">
+        <h2 id="resultHeading">Transcript</h2>
+        <div class="result-actions">
+          <button id="copyBtn" class="ghost-button" type="button">Copy</button>
+          <button id="downloadBtn" class="ghost-button" type="button">Download .txt</button>
+        </div>
+      </div>
+
+      <dl class="result-meta">
+        <div><dt>Engine</dt><dd id="metaEngine">—</dd></div>
+        <div><dt>Language</dt><dd id="metaLanguage">—</dd></div>
+        <div><dt>Audio</dt><dd id="metaDuration">—</dd></div>
+        <div><dt>Processing</dt><dd id="metaElapsed">—</dd></div>
+      </dl>
+
+      <textarea id="transcript" class="transcript" readonly rows="10"
+                aria-label="Transcript text"></textarea>
+
+      <div id="warnings" class="warnings" hidden></div>
+
+      <details id="segmentsBlock" class="segments" hidden>
+        <summary>Timestamps</summary>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th scope="col">Start</th><th scope="col">End</th><th scope="col">Text</th></tr></thead>
+            <tbody id="segmentsBody"></tbody>
+          </table>
+        </div>
+      </details>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <p id="footerNote">Audio is sent to the transcription server and not stored.</p>
+    <p class="footer-links">
+      <a href="#" id="apiDocsLink" target="_blank" rel="noopener">API docs</a>
+      <span aria-hidden="true">·</span>
+      <span>Free-tier server may take up to a minute to wake up.</span>
+    </p>
+  </footer>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
